@@ -50,8 +50,8 @@ async fn build_all_if_not_exists(client: Client, cluster_name: String) -> anyhow
 
     // Only run if we know it doesn't already exist
     if !exists_res {
-        build_selector(client.clone(), cluster_name.clone()).await;
-        build_cluster(client.clone(), cluster_name.clone()).await;
+        build_selector(client.clone(), cluster_name.clone()).await?;
+        build_cluster(client.clone(), cluster_name.clone()).await?;
     }
 
 
@@ -59,15 +59,38 @@ async fn build_all_if_not_exists(client: Client, cluster_name: String) -> anyhow
 }
 
 async fn check_if_cluster_exists(client: Client, cluster_name: String) -> anyhow::Result<bool> {
+    let gvk = GroupVersionKind::gvk("provisioning.cattle.io", "v1", "Cluster");
+    let api_resource = ApiResource::from_gvk(&gvk);
+    let dynapi: Api<DynamicObject> = Api::namespaced_with(client.clone(), "fleet_default", &api_resource);
+
+    let selector = String::from("metadata.name=") + cluster_name.as_str();
+    let lp = &ListParams::default().fields(selector.as_str());
+
+    let clusters = dynapi.list(lp).await?;
+
+    if let Some(count) = clusters.metadata.remaining_item_count {
+        return Ok(count>0)
+    }
 
 
+    let gvk = GroupVersionKind::gvk("provisioning.cattle.io", "v1", "Cluster");
+    let api_resource = ApiResource::from_gvk(&gvk);
+    let dynapi: Api<DynamicObject> = Api::namespaced_with(client.clone(), "fleet_default", &api_resource);
 
+    let selector = String::from("metadata.name=") + cluster_name.as_str();
+    let lp = &ListParams::default().fields(selector.as_str());
 
-    Ok(true)
+    let clusters = dynapi.list(lp).await?;
+
+    if let Some(count) = clusters.metadata.remaining_item_count {
+        return Ok(count>0)
+    }
+
+    Ok(false)
 }
 
 async fn build_cluster(client: Client, cluster_name: String) -> anyhow::Result<()> {
-    let gvk = GroupVersionKind::gvk("provisioning.cattle.io", "v1", "Cluster");
+    let gvk = GroupVersionKind::gvk("elemental.cattle.io", "v1beta1", "MachineInventorySelectorTemplate");
     let api_resource = ApiResource::from_gvk(&gvk);
     let dynapi: Api<DynamicObject> = Api::namespaced_with(client.clone(), "fleet_default", &api_resource);
 
@@ -91,7 +114,8 @@ async fn build_cluster(client: Client, cluster_name: String) -> anyhow::Result<(
         }
     }));
 
-    let res = dynapi.create(&PostParams::default(), &data).await;
+    let _res = dynapi.create(&PostParams::default(), &data).await?;
+
     Ok(())
 }
 
@@ -115,6 +139,6 @@ async fn build_selector(client: Client, cluster_name: String) -> anyhow::Result<
         }
     }));
 
-    let res = dynapi.create(&PostParams::default(), &data).await;
+    let _res = dynapi.create(&PostParams::default(), &data).await?;
     Ok(())
 }
