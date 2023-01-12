@@ -7,6 +7,7 @@ use kube::{
     runtime::{watcher, WatchStreamExt},
     Client, 
 };
+use serde_json::Value;
 
 //use tracing::*;
 
@@ -36,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     while let Some(p) = items.try_next().await? {
         if let Some(labels) = p.metadata.labels {
             if let Some(cluster_name) = labels.get("autoClusterName") {
-                build_all_if_not_exists(client.clone(), cluster_name.clone()).await;
+                build_all_if_not_exists(client.clone(), cluster_name.clone()).await?;
             }
         }
     }
@@ -48,10 +49,30 @@ async fn build_all_if_not_exists(client: Client, cluster_name: String) -> anyhow
     //Check if cluster or selector already exist
     let exists_res = check_if_cluster_exists(client.clone(), cluster_name.clone()).await?;
 
+    let cluster_data = serde_json::json!({
+        "spec": {
+            "rkeConfig": {
+                "machinePools": [{
+                    "controlPlaneRole": true,
+                    "name": "pool1",
+                    "quantity": 5,
+                    "workerRole": true,
+                    "machineConfigRef":{
+                        "apiVersion": "elemental.cattle.io/v1beta1",
+                        "kind": "MachineInventorySelectorTemplate",
+                        "name": cluster_name
+                    }
+                }]
+            },
+            "kubernetesVersion": "v1.24.8+k3s1"
+                
+        }
+    });
+
     // Only run if we know it doesn't already exist
     if !exists_res {
         build_selector(client.clone(), cluster_name.clone()).await?;
-        build_cluster(client.clone(), cluster_name.clone()).await?;
+        build_cluster(client.clone(), cluster_name.clone(), cluster_data).await?;
     }
 
 
@@ -89,30 +110,12 @@ async fn check_if_cluster_exists(client: Client, cluster_name: String) -> anyhow
     Ok(false)
 }
 
-async fn build_cluster(client: Client, cluster_name: String) -> anyhow::Result<()> {
+async fn build_cluster(client: Client, cluster_name: String, cluster_data: Value) -> anyhow::Result<()> {
     let gvk = GroupVersionKind::gvk("elemental.cattle.io", "v1beta1", "MachineInventorySelectorTemplate");
     let api_resource = ApiResource::from_gvk(&gvk);
     let dynapi: Api<DynamicObject> = Api::namespaced_with(client.clone(), "fleet_default", &api_resource);
 
-    let data = DynamicObject::new(&cluster_name, &api_resource).data(serde_json::json!({
-        "spec": {
-            "rkeConfig": {
-                "machinePools": [{
-                    "controlPlaneRole": true,
-                    "name": "pool1",
-                    "quantity": 5,
-                    "workerRole": true,
-                    "machineConfigRef":{
-                        "apiVersion": "elemental.cattle.io/v1beta1",
-                        "kind": "MachineInventorySelectorTemplate",
-                        "name": cluster_name
-                    }
-                }]
-            },
-            "kubernetesVersion": "v1.24.8+k3s1"
-                
-        }
-    }));
+    let data = DynamicObject::new(&cluster_name, &api_resource).data(cluster_data);
 
     let _res = dynapi.create(&PostParams::default(), &data).await?;
 
